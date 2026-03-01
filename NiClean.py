@@ -141,7 +141,7 @@ def convert_image_to_jpg(src: Path, dest: Path) -> bool:
         "-i", str(src),
         "-map_metadata", "-1",
         "-vf", "format=rgb24",   # avoid weird pixel formats
-        "-q:v", "2",             # jpeg quality (2 is high)
+        "-q:v", "1",             # jpeg quality (1 is highest)
         str(dest),
     ]
 
