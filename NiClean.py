@@ -154,20 +154,30 @@ def convert_image_to_jpg(src: Path, dest: Path) -> bool:
     
 
 def create_output_file(src: Path, dest: Path) -> None:
-    wants_conversion = src.suffix.lower() != dest.suffix.lower()
+    # Normalize extensions for comparison
+    src_ext = src.suffix.lower()
+    dest_ext = dest.suffix.lower()
+    
+    # Check if moving between JPEG variations (.jpg, .jpeg, .JPG, .JPEG)
+    is_src_jpg = src_ext in {".jpg", ".jpeg"}
+    is_dest_jpg = dest_ext in {".jpg", ".jpeg"}
+    
+    # Only "want conversion" if formats are truly different (e.g., PNG -> JPG)
+    # If both are JPEGs, we skip the FFmpeg block and go straight to shutil.copy2
+    wants_conversion = (src_ext != dest_ext) and not (is_src_jpg and is_dest_jpg)
 
     if wants_conversion:
         # Video conversion
-        if src.suffix.lower() in VIDEO_EXTS:
+        if src_ext in VIDEO_EXTS:
             if convert_with_ffmpeg(src, dest):
                 return
 
         # Image conversion (e.g., png -> jpg)
-        if src.suffix.lower() in IMAGE_EXTS and dest.suffix.lower() in {".jpg", ".jpeg"}:
+        if src_ext in IMAGE_EXTS and dest_ext in {".jpg", ".jpeg"}:
             if convert_image_to_jpg(src, dest):
                 return
 
-    # Default: plain copy
+    # Default: plain copy (Preserves 100% original quality)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
 
