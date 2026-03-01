@@ -119,8 +119,8 @@ jobs:
           brew update
           brew install ffmpeg exiftool
           mkdir -p tools
-          cp "$(command -v ffmpeg)" tools/ffmpeg
-          cp "$(command -v exiftool)" tools/exiftool
+          cp $(which ffmpeg) tools/ffmpeg
+          cp $(which exiftool) tools/exiftool
           chmod +x tools/ffmpeg tools/exiftool
           ls -la tools
 
@@ -154,6 +154,7 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --name NiClean \
+            --target-arch universal2 \
             --collect-all customtkinter \
             --icon "assets/niclean.icns" \
             --add-data "assets/niclean.icns:assets" \
