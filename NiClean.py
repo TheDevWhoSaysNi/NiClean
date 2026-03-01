@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NiClean v0.5.1
+NiClean v0.5.2
 License: Apache-2.0 (see LICENSE)
 Third party disclosures: (see NOTICE)
 Ni! 🌿
@@ -25,7 +25,7 @@ from tkinter import messagebox, filedialog
 
 # --- Constants ---
 APP_NAME = "NiClean"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 DEFAULT_OUTPUT_FOLDER = "NiClean_cleaned"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp", ".gif"}
