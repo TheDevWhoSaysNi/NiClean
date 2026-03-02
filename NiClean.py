@@ -62,26 +62,43 @@ def resource_path(relative: str) -> str:
 
 def default_input_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe_path = Path(sys.executable).resolve()
+
+        # On macOS app bundles, sys.executable is usually:
+        #   /path/to/NiClean.app/Contents/MacOS/NiClean
+        # For a nicer UX, default to the folder *containing* NiClean.app
+        if platform.system() == "Darwin":
+            for parent in exe_path.parents:
+                if parent.suffix == ".app":
+                    return parent.parent  # folder that contains NiClean.app
+
+        # Windows onefile/onedir, Linux binaries, or unknown layouts:
+        # fall back to the directory containing the executable itself.
+        return exe_path.parent
+
+    # Non-frozen/dev mode: use the folder containing the script.
     return Path(__file__).resolve().parent
 
 
 def get_tool_path(tool_name: str):
     """Find ffmpeg/exiftool in bundled tools or system PATH."""
-    if platform.system() == "Windows":
-        tool_exe = f"{tool_name}.exe"
+    system = platform.system()
 
-        # 1) Inside PyInstaller bundle
-        p1 = Path(resource_path(f"tools/{tool_exe}"))
-        if p1.exists():
-            return str(p1)
+    # Executable name differs on Windows vs. Unix-like systems
+    exe_name = f"{tool_name}.exe" if system == "Windows" else tool_name
 
-        # 2) Next to executable (onedir builds)
-        p2 = Path(sys.executable).resolve().parent / "tools" / tool_exe
-        if p2.exists():
-            return str(p2)
+    # 1) Inside PyInstaller bundle (onefile / app bundle)
+    bundled = Path(resource_path(f"tools/{exe_name}"))
+    if bundled.exists():
+        return str(bundled)
 
-    # 3) System PATH fallback
+    # 2) Next to executable (onedir / unpacked dist)
+    exe_dir = Path(sys.executable).resolve().parent
+    sidecar = exe_dir / "tools" / exe_name
+    if sidecar.exists():
+        return str(sidecar)
+
+    # 3) System PATH fallback (dev environment or user-installed tools)
     return shutil.which(tool_name)
 
 
@@ -321,7 +338,7 @@ class NiCleanApp(ctk.CTk):
         # Run button
         self.run_btn = ctk.CTkButton(
             self,
-            text="Run! Ni!",
+            text="NiClean my Media",
             command=self.start_processing,
             height=50,
             width=220,
