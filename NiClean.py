@@ -31,6 +31,9 @@ DEFAULT_OUTPUT_FOLDER = "NiClean_cleaned"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 
+# Debug logging is controlled at runtime from Settings.log_metadata
+DEBUG_LOG_ENABLED = False
+
 
 @dataclass
 class Settings:
@@ -38,6 +41,31 @@ class Settings:
     output_mode: str = "subfolder"      # subfolder | replace
     output_folder: str = DEFAULT_OUTPUT_FOLDER
     include_subfolders: bool = False    # scan recursively when True
+    log_metadata: bool = False          # write per-file before/after ExifTool dump
+
+
+def _log_debug(message: str, context_path: Optional[Path] = None) -> None:
+    """Lightweight debug logger, writes alongside media or app folder. Safe to fail."""
+    from __main__ import DEBUG_LOG_ENABLED  # type: ignore[import-not-found]
+
+    # Completely disable when debug/logging is turned off
+    if not DEBUG_LOG_ENABLED:
+        return
+    try:
+        if context_path is not None:
+            base_dir = context_path.parent if context_path.is_file() else context_path
+        else:
+            base_dir = default_input_dir()
+
+        base_dir.mkdir(parents=True, exist_ok=True)
+        log_file = base_dir / "NiClean_debug.log"
+
+        with log_file.open("a", encoding="utf-8") as f:
+            ts = datetime.now().isoformat(timespec="seconds")
+            f.write(f"[{ts}] {message}\n")
+    except Exception:
+        # Never raise from logging in production utility
+        pass
 
 
 def subprocess_kwargs_no_window() -> dict:
@@ -105,6 +133,7 @@ def get_tool_path(tool_name: str):
 def convert_with_ffmpeg(src: Path, dest: Path) -> bool:
     ffmpeg = get_tool_path("ffmpeg")
     if not ffmpeg:
+        _log_debug("FFmpeg not found; skipping convert_with_ffmpeg and falling back to copy.", src)
         return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -120,9 +149,11 @@ def convert_with_ffmpeg(src: Path, dest: Path) -> bool:
 
     try:
         subprocess.run(remux_cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
+        _log_debug(f"FFmpeg remux OK: {src} -> {dest}", src)
         return True
-    except subprocess.CalledProcessError:
-        pass  # Remux failed — fallback to re-encode
+    except subprocess.CalledProcessError as e:
+        _log_debug(f"FFmpeg remux failed for {src}: {e.stderr.decode(errors='ignore')}", src)
+        # Remux failed — fallback to re-encode
 
     # 2) High-quality encode fallback
     encode_cmd = [
@@ -139,15 +170,18 @@ def convert_with_ffmpeg(src: Path, dest: Path) -> bool:
 
     try:
         subprocess.run(encode_cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
+        _log_debug(f"FFmpeg encode OK: {src} -> {dest}", src)
         return True
     except subprocess.CalledProcessError as e:
-        print("FFmpeg encode failed:", e.stderr.decode(errors="ignore"))
+        msg = e.stderr.decode(errors="ignore")
+        _log_debug(f"FFmpeg encode failed for {src}: {msg}", src)
         return False
 
 
 def convert_image_to_jpg(src: Path, dest: Path) -> bool:
     ffmpeg = get_tool_path("ffmpeg")
     if not ffmpeg:
+        _log_debug("FFmpeg not found; skipping convert_image_to_jpg and falling back to copy.", src)
         return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -164,9 +198,11 @@ def convert_image_to_jpg(src: Path, dest: Path) -> bool:
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
+        _log_debug(f"Image convert OK: {src} -> {dest}", src)
         return True
     except subprocess.CalledProcessError as e:
-        print("FFmpeg image convert failed:", e.stderr.decode(errors="ignore"))
+        msg = e.stderr.decode(errors="ignore")
+        _log_debug(f"FFmpeg image convert failed for {src}: {msg}", src)
         return False
     
 
@@ -202,14 +238,41 @@ def create_output_file(src: Path, dest: Path) -> None:
 def clean_metadata(file_path: Path, exiftool_path: Optional[str]) -> bool:
     """Strip metadata in-place using ExifTool. Returns True on success."""
     if not exiftool_path:
+        _log_debug("ExifTool not found; skipping clean_metadata.", file_path)
         return False
 
     cmd = [exiftool_path, "-all=", "-overwrite_original", str(file_path)]
     try:
         subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
+        _log_debug(f"ExifTool scrub OK: {file_path}", file_path)
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        msg = e.stderr.decode(errors="ignore")
+        _log_debug(f"ExifTool scrub failed for {file_path}: {msg}", file_path)
         return False
+
+
+def append_metadata_log_entry(
+    log_path: Path,
+    exiftool_path: str,
+    file_path: Path,
+    phase: str,
+) -> None:
+    """Append a before/after ExifTool dump for a single file to a session log."""
+    try:
+        cmd = [exiftool_path, str(file_path)]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            ts = datetime.now().isoformat(timespec="seconds")
+            f.write(f"===== {phase} ({ts}) {file_path.name} =====\n")
+            f.write(result.stdout)
+            if result.stderr:
+                f.write("\n[exiftool stderr]\n")
+                f.write(result.stderr)
+            f.write("\n\n")
+    except Exception as e:
+        _log_debug(f"Failed to append metadata log for {file_path} ({phase}): {e}", file_path)
 
 
 def make_output_name(path: Path, settings: Settings, counter: int) -> str:
@@ -332,6 +395,15 @@ class NiCleanApp(ctk.CTk):
         )
         self.replace_switch.grid(row=2, column=0, columnspan=2, pady=(10, 20), sticky="w", padx=20)
 
+        # Metadata log option
+        self.log_metadata_var = ctk.BooleanVar(value=False)
+        self.log_metadata_switch = ctk.CTkSwitch(
+            self.settings_frame,
+            text="Generate Metadata Log (before/after)",
+            variable=self.log_metadata_var,
+        )
+        self.log_metadata_switch.grid(row=3, column=0, columnspan=2, pady=(0, 20), sticky="w", padx=20)
+
         # Expand right column nicely
         self.settings_frame.grid_columnconfigure(1, weight=1)
 
@@ -362,6 +434,7 @@ class NiCleanApp(ctk.CTk):
             naming=self.naming_var.get(),
             output_mode="replace" if self.replace_var.get() else "subfolder",
             include_subfolders=bool(self.subfolders_var.get()),
+            log_metadata=bool(self.log_metadata_var.get()),
         )
 
         threading.Thread(target=self.process_logic, args=(settings,), daemon=True).start()
@@ -408,6 +481,10 @@ class NiCleanApp(ctk.CTk):
             self._enable_run()
             return
 
+        # Enable or disable low-level debug logging for this run
+        global DEBUG_LOG_ENABLED  # type: ignore[assignment]
+        DEBUG_LOG_ENABLED = settings.log_metadata
+
         # 2) Setup output root
         if settings.output_mode == "subfolder":
             out_root = self.input_dir / settings.output_folder
@@ -418,12 +495,34 @@ class NiCleanApp(ctk.CTk):
         exiftool_path = get_tool_path("exiftool")
         ffmpeg_path = get_tool_path("ffmpeg")  # optional if you want it cached too
         has_exiftool = bool(exiftool_path)
+        has_ffmpeg = bool(ffmpeg_path)
 
-        # Tool availability warning (non-fatal)
-        if not has_exiftool:
+        # Optional per-session metadata log (before/after ExifTool dump for each file)
+        metadata_log_path: Optional[Path] = None
+        if settings.log_metadata:
+            # Log lives in NiClean_cleaned for subfolder mode, otherwise alongside originals
+            metadata_root = out_root if settings.output_mode == "subfolder" else self.input_dir
+            metadata_log_path = metadata_root / "NiClean_metadata_log.txt"
+
+        # Tool availability warnings (non-fatal)
+        if not has_exiftool and not has_ffmpeg:
+            self._set_status("Warning: ExifTool and FFmpeg not found. Files will be copied only, no scrubbing or conversion.")
+        elif not has_exiftool:
             self._set_status("Warning: ExifTool not found. Files will be copied/converted but not scrubbed.")
+        elif not has_ffmpeg:
+            self._set_status("Warning: FFmpeg not found. Files will be scrubbed but not transcoded.")
         else:
             self._set_status("Starting...")
+
+        # If user asked for a metadata log but ExifTool is missing, note that once
+        if settings.log_metadata and metadata_log_path is not None and not has_exiftool:
+            try:
+                metadata_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with metadata_log_path.open("a", encoding="utf-8") as f:
+                    ts = datetime.now().isoformat(timespec="seconds")
+                    f.write(f"[{ts}] ExifTool not found; cannot record metadata before/after.\n\n")
+            except Exception:
+                _log_debug("Failed to initialize metadata log file.", metadata_log_path)
 
         # 3) Processing loop
         scrubbed = 0
@@ -451,6 +550,10 @@ class NiCleanApp(ctk.CTk):
                 dest = dest_dir / new_name
 
             try:
+                # Optional: log BEFORE metadata for this file
+                if settings.log_metadata and metadata_log_path is not None and has_exiftool and exiftool_path is not None:
+                    append_metadata_log_entry(metadata_log_path, exiftool_path, src, "BEFORE")
+
                 if settings.output_mode == "replace":
                     # Create into a temp file first, then replace original
                     with tempfile.TemporaryDirectory() as td:
@@ -475,6 +578,10 @@ class NiCleanApp(ctk.CTk):
                         failed += 1
                 else:
                     failed += 1
+
+                # Optional: log AFTER metadata for this file
+                if settings.log_metadata and metadata_log_path is not None and has_exiftool and exiftool_path is not None:
+                    append_metadata_log_entry(metadata_log_path, exiftool_path, dest, "AFTER")
 
             except Exception as e:
                 failed += 1

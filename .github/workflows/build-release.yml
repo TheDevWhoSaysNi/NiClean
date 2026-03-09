@@ -19,10 +19,10 @@ jobs:
         include:
           - os: windows-latest
             asset_name: NiClean-Windows.zip
-          - os: macos-latest
-            asset_name: NiClean-macOS.zip
           - os: ubuntu-latest
             asset_name: NiClean-Linux.zip
+          # - os: macos-latest          # Temporarily disabled macOS builds
+          #   asset_name: NiClean-macOS.zip
 
     steps:
       - name: Checkout (with LFS)
@@ -112,17 +112,17 @@ jobs:
           chmod +x tools/ffmpeg tools/exiftool
           ls -la tools
 
-      - name: Install tools (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew update
-          brew install ffmpeg exiftool
-          mkdir -p tools
-          cp $(which ffmpeg) tools/ffmpeg
-          cp $(which exiftool) tools/exiftool
-          chmod +x tools/ffmpeg tools/exiftool
-          ls -la tools
+      # - name: Install tools (macOS)
+      #   if: runner.os == 'macOS'
+      #   shell: bash
+      #   run: |
+      #     brew update
+      #     brew install ffmpeg exiftool
+      #     mkdir -p tools
+      #     cp $(which ffmpeg) tools/ffmpeg
+      #     cp $(which exiftool) tools/exiftool
+      #     chmod +x tools/ffmpeg tools/exiftool
+      #     ls -la tools
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -149,18 +149,18 @@ jobs:
             --add-binary "tools/exiftool:tools" \
             NiClean.py
 
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          pyinstaller --noconfirm --windowed --name NiClean \
-            --target-arch universal2 \
-            --collect-all customtkinter \
-            --icon "assets/niclean.icns" \
-            --add-data "assets/niclean.icns:assets" \
-            --add-binary "tools/ffmpeg:tools" \
-            --add-binary "tools/exiftool:tools" \
-            NiClean.py
+      # - name: Build (macOS)
+      #   if: runner.os == 'macOS'
+      #   shell: bash
+      #   run: |
+      #     pyinstaller --noconfirm --windowed --name NiClean \
+      #       --target-arch universal2 \
+      #       --collect-all customtkinter \
+      #       --icon "assets/niclean.icns" \
+      #       --add-data "assets/niclean.icns:assets" \
+      #       --add-binary "tools/ffmpeg:tools" \
+      #       --add-binary "tools/exiftool:tools" \
+      #       NiClean.py
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -179,13 +179,13 @@ jobs:
           chmod +x release/NiClean
           (cd release && zip -r "../${{ matrix.asset_name }}" .)
 
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p release
-          cp -R dist/NiClean.app release/NiClean.app
-          ditto -c -k --sequesterRsrc --keepParent release/NiClean.app "${{ matrix.asset_name }}"
+      # - name: Package (macOS)
+      #   if: runner.os == 'macOS'
+      #   shell: bash
+      #   run: |
+      #     mkdir -p release
+      #     cp -R dist/NiClean.app release/NiClean.app
+      #     ditto -c -k --sequesterRsrc --keepParent release/NiClean.app "${{ matrix.asset_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -209,7 +209,7 @@ jobs:
         with:
           files: |
             artifacts/**/NiClean-Windows.zip
-            artifacts/**/NiClean-macOS.zip
+            # artifacts/**/NiClean-macOS.zip   # macOS temporarily disabled
             artifacts/**/NiClean-Linux.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
