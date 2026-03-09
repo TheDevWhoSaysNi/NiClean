@@ -261,7 +261,13 @@ def append_metadata_log_entry(
     """Append a before/after ExifTool dump for a single file to a session log."""
     try:
         cmd = [exiftool_path, str(file_path)]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            **subprocess_kwargs_no_window(),
+        )
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as f:
             ts = datetime.now().isoformat(timespec="seconds")
