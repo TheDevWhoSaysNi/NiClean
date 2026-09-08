@@ -19,9 +19,15 @@
 
 Go to the **Releases** page and download the zip for your OS:
 
-- **Windows:** NiClean-Windows.zip → run `NiClean.exe` TESTING AND WORKING OUT BUGS
-- **macOS:** NiClean-macOS.zip → run `NiClean.app` NOT TESTED YET
-- **Linux:** NiClean-Linux.zip → run `NiClean` SUPPORT TBD
+- **Windows:** NiClean-Windows.zip → run `NiClean.exe`
+- **macOS (Apple Silicon):** NiClean-macOS.zip → run `NiClean.app`
+- **Linux:** NiClean-Linux.zip → run `NiClean`
+
+The first time you open `NiClean.app` on macOS, Gatekeeper may block it because the app is not notarized. Move it out of Downloads (Desktop or the folder with your photos), then right-click → **Open**. If macOS still says the app is damaged, clear the quarantine flag in Terminal:
+
+```bash
+xattr -cr /path/to/NiClean.app
+```
 
 ### Basic use (GUIl)
 1) Put NiClean in a folder containing photos/videos (or point at requested directory)

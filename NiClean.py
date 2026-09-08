@@ -9,6 +9,7 @@ Ni! 🌿
 from __future__ import annotations
 
 import platform
+import stat
 import sys
 import shutil
 import subprocess
@@ -46,9 +47,6 @@ class Settings:
 
 def _log_debug(message: str, context_path: Optional[Path] = None) -> None:
     """Lightweight debug logger, writes alongside media or app folder. Safe to fail."""
-    from __main__ import DEBUG_LOG_ENABLED  # type: ignore[import-not-found]
-
-    # Completely disable when debug/logging is turned off
     if not DEBUG_LOG_ENABLED:
         return
     try:
@@ -98,7 +96,13 @@ def default_input_dir() -> Path:
         if platform.system() == "Darwin":
             for parent in exe_path.parents:
                 if parent.suffix == ".app":
-                    return parent.parent  # folder that contains NiClean.app
+                    containing = parent.parent
+                    # Gatekeeper App Translocation runs a quarantined .app from a
+                    # random read-only path. Don't default to writing there.
+                    if "AppTranslocation" in containing.parts:
+                        pictures = Path.home() / "Pictures"
+                        return pictures if pictures.is_dir() else Path.home()
+                    return containing
 
         # Windows onefile/onedir, Linux binaries, or unknown layouts:
         # fall back to the directory containing the executable itself.
@@ -108,6 +112,20 @@ def default_input_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _ensure_unix_executable(path: str) -> str:
+    """Restore +x if zip/PyInstaller dropped it. No-op on Windows."""
+    if platform.system() == "Windows":
+        return path
+    p = Path(path)
+    try:
+        mode = p.stat().st_mode
+        if not (mode & stat.S_IXUSR):
+            p.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except Exception:
+        pass
+    return path
+
+
 def get_tool_path(tool_name: str):
     """Find ffmpeg/exiftool in bundled tools or system PATH."""
     system = platform.system()
@@ -115,19 +133,53 @@ def get_tool_path(tool_name: str):
     # Executable name differs on Windows vs. Unix-like systems
     exe_name = f"{tool_name}.exe" if system == "Windows" else tool_name
 
+    candidates: list[Path] = []
+
     # 1) Inside PyInstaller bundle (onefile / app bundle)
-    bundled = Path(resource_path(f"tools/{exe_name}"))
-    if bundled.exists():
-        return str(bundled)
+    candidates.append(Path(resource_path(f"tools/{exe_name}")))
 
     # 2) Next to executable (onedir / unpacked dist)
-    exe_dir = Path(sys.executable).resolve().parent
-    sidecar = exe_dir / "tools" / exe_name
-    if sidecar.exists():
-        return str(sidecar)
+    exe_path = Path(sys.executable).resolve()
+    candidates.append(exe_path.parent / "tools" / exe_name)
+
+    # 2b) macOS .app layouts used by different PyInstaller versions
+    if system == "Darwin":
+        for parent in exe_path.parents:
+            if parent.suffix == ".app":
+                candidates.extend(
+                    [
+                        parent / "Contents" / "Resources" / "tools" / exe_name,
+                        parent / "Contents" / "MacOS" / "tools" / exe_name,
+                        parent / "Contents" / "Frameworks" / "tools" / exe_name,
+                        parent / "Contents" / "Frameworks" / "_internal" / "tools" / exe_name,
+                        parent / "Contents" / "Resources" / "_internal" / "tools" / exe_name,
+                    ]
+                )
+                break
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return _ensure_unix_executable(str(candidate))
 
     # 3) System PATH fallback (dev environment or user-installed tools)
     return shutil.which(tool_name)
+
+
+def _is_perl_script(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            first = f.readline(160)
+        return first.startswith(b"#!") and b"perl" in first.lower()
+    except Exception:
+        return False
+
+
+def exiftool_argv(exiftool_path: str, *args: str) -> list[str]:
+    """Build an argv that can run a bundled Windows exe or a Perl ExifTool script."""
+    if platform.system() != "Windows" and _is_perl_script(exiftool_path):
+        perl = shutil.which("perl") or "/usr/bin/perl"
+        return [perl, exiftool_path, *args]
+    return [exiftool_path, *args]
 
 
 def convert_with_ffmpeg(src: Path, dest: Path) -> bool:
@@ -181,7 +233,9 @@ def convert_with_ffmpeg(src: Path, dest: Path) -> bool:
 def convert_image_to_jpg(src: Path, dest: Path) -> bool:
     ffmpeg = get_tool_path("ffmpeg")
     if not ffmpeg:
-        _log_debug("FFmpeg not found; skipping convert_image_to_jpg and falling back to copy.", src)
+        _log_debug("FFmpeg not found; skipping convert_image_to_jpg ffmpeg path.", src)
+        if platform.system() == "Darwin":
+            return convert_with_sips(src, dest)
         return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +257,28 @@ def convert_image_to_jpg(src: Path, dest: Path) -> bool:
     except subprocess.CalledProcessError as e:
         msg = e.stderr.decode(errors="ignore")
         _log_debug(f"FFmpeg image convert failed for {src}: {msg}", src)
+
+    # macOS can convert HEIC/PNG/TIFF via built-in sips even if FFmpeg lacks the codec
+    if platform.system() == "Darwin":
+        return convert_with_sips(src, dest)
+    return False
+
+
+def convert_with_sips(src: Path, dest: Path) -> bool:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "sips",
+        "-s", "format", "jpeg",
+        "-s", "formatOptions", "best",
+        str(src),
+        "--out", str(dest),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
+        _log_debug(f"sips convert OK: {src} -> {dest}", src)
+        return True
+    except Exception as e:
+        _log_debug(f"sips convert failed for {src}: {e}", src)
         return False
     
 
@@ -241,7 +317,7 @@ def clean_metadata(file_path: Path, exiftool_path: Optional[str]) -> bool:
         _log_debug("ExifTool not found; skipping clean_metadata.", file_path)
         return False
 
-    cmd = [exiftool_path, "-all=", "-overwrite_original", str(file_path)]
+    cmd = exiftool_argv(exiftool_path, "-all=", "-overwrite_original", str(file_path))
     try:
         subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs_no_window())
         _log_debug(f"ExifTool scrub OK: {file_path}", file_path)
@@ -260,7 +336,7 @@ def append_metadata_log_entry(
 ) -> None:
     """Append a before/after ExifTool dump for a single file to a session log."""
     try:
-        cmd = [exiftool_path, str(file_path)]
+        cmd = exiftool_argv(exiftool_path, str(file_path))
         result = subprocess.run(
             cmd,
             check=True,
@@ -314,6 +390,8 @@ class NiCleanApp(ctk.CTk):
         self.title(f"{APP_NAME} v{APP_VERSION}")
         self.geometry("550x650")
         self.minsize(550, 650)
+        if platform.system() == "Darwin":
+            self.after(100, self._raise_on_macos)
 
         # Set window/taskbar icon (runtime)
         try:
@@ -424,8 +502,22 @@ class NiCleanApp(ctk.CTk):
         )
         self.run_btn.pack(pady=(0, 40))
 
+    def _raise_on_macos(self) -> None:
+        try:
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
+
     def choose_input_dir(self) -> None:
-        folder = filedialog.askdirectory(initialdir=str(self.input_dir))
+        # Tk folder dialogs on macOS often appear behind the app without a focus nudge
+        if platform.system() == "Darwin":
+            self.lift()
+            self.focus_force()
+            self.update()
+        folder = filedialog.askdirectory(parent=self, initialdir=str(self.input_dir))
         if folder:
             self.input_dir = Path(folder)
             self.dir_label.configure(text=str(self.input_dir))
