@@ -26,7 +26,7 @@ from tkinter import messagebox, filedialog
 
 # --- Constants ---
 APP_NAME = "NiClean"
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.5"
 DEFAULT_OUTPUT_FOLDER = "NiClean_cleaned"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp", ".gif"}
